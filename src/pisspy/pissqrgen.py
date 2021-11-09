@@ -22,17 +22,9 @@
 #$@$$@$$@$$@$$@$$@$$@$$@$$@$$@$$@$$@$$@$$@$$@$$@$$@$$@$$@$$@$$@$$@$$@$$@$$@$$@$#
 #==============================================================================#
 
-import pyqrcode, math;
+import pyqrcode, math, pissdb;
 from PIL import Image, ImageOps, ImageFont, ImageDraw;
 from io import BytesIO;
-
-
-# getIdNum - get a fresh id number and return it
-
-def getIdNum():
-    return 0; # to be implemented
-
-
 
 # formatIdNum - format a given 32 bit id number to look best on a qr code label
 #
@@ -65,7 +57,7 @@ def formatIdNum(idNum):
         if len(numStr) < 2:
             numStr = "0" + numStr;
 
-        # Add the hex number to the array
+        # Add the hex number to the arrayimg = Image.new("RGB", (width, height), color="white");
         numStrs.append(numStr);
 
     # Create the formated hex string with the four hex numbers and
@@ -86,19 +78,21 @@ def formatIdNum(idNum):
 
 def makeQrCode(idNum, size):
     # QR code quiet zone, minimum size being 4
-    QUIET_ZONE = 4;
+    QR_MIN_SIZE = 21;
+    MIN_QUIET_ZONE = 4;
+    MAX_QUIET_ZONE = QR_MIN_SIZE;
     # make the qr code scale equal to the size over the width and height of
     # the qr code in modules
-    modScale = math.floor(size / (21 + (2 * QUIET_ZONE)))
+    modScale = math.floor(size / (21 + (2 * MIN_QUIET_ZONE)))
 
     # Create the qr code
     qr = pyqrcode.create(idNum, error='H', version=1);
 
     # Convert the qr code to an intermediate XBM format
     # Don't ask me why pyqrcode can't output PIL images!
-    # Set the quiet zone to 1+ the default so we can just crop the image to the
+    # Set the quiet zone to 2x the default so we can just crop the image to the
     # right width+height
-    xbm = qr.xbm(scale = modScale, quiet_zone = QUIET_ZONE + 1);
+    xbm = qr.xbm(scale = modScale, quiet_zone = MAX_QUIET_ZONE);
 
     # Convert this xbm to a PIL image
     # Seems like a bunch of hoopla to me!
@@ -138,44 +132,84 @@ def makeQrCode(idNum, size):
 # height - the height of the label
 # dpi - the dpi setting we're using
 
-def makeLabel(idNum, width, height, dpi):
+def makeLabel(idNum, width, height):
     # We can't even specify dpi, idk why the hell we use PT as our units
     # 32pt = 19px*27px, 64pt = 38px*54px, 128pt = 77px*107px
     # 1*1pt = 0.6015625*0.8359375px approximately
     PT_WIDTH = 0.6015625;
     PT_HEIGHT = 0.8359375;
-    FONT_FILE = "cour.ttf"; # Set the font file to Courier New
+    FONT_FILE = "courbd.ttf"; # Set the font file to Courier New
+
+    # Text margin, set to 1/16th the width or height of the label
+    margin = math.floor(min(width, height) / 16);
 
     # Convert the id number to a formatted string
     idNumStr = formatIdNum(idNum);
-    # Have the size of the font tied to the width of the label. Why?
-    # Easier to program, that simple
-    fontSize = width / (PT_WIDTH * len(idNumStr));
+    # Have the size of the font equal to either the width or 1/4 the height
+    # of the label
+    fontSize = math.floor(min(
+        (width - (margin * 2)) / (PT_WIDTH * len(idNumStr)),
+        ((height / 4) - (margin * 2)) / PT_HEIGHT
+    ));
+
+    # Center the text on the label horizontally
+    textXY = (
+        math.floor((width / 2) - ((fontSize * PT_WIDTH * len(idNumStr)) / 2)),
+        margin
+    );
 
     # Generate a qr code with the remaining space, by setting the size to either
     # the remaining vertical space(height - the vertical size of the text), or
     # the width of the label, whichever is smaller
-    qrSize = math.floor(min(height - (fontSize * PT_HEIGHT), width));
+    qrSize = math.floor(min(height - (fontSize * PT_HEIGHT) - margin, width));
     qrImg = makeQrCode(idNum, qrSize);
     # Calculate the XY of the qr code in the label
     # The X is calculated by getting the remainder of the horizontal free space
     # (width - qrSize) and dividing it by 2
     # The Y is equal to the height of out font
-    qrXY = (math.floor((width - qrSize) / 2), math.floor(fontSize * PT_HEIGHT));
+    qrXY = (math.floor((width - qrSize) / 2), math.floor(fontSize * PT_HEIGHT) + margin);
 
     # Load the font
     """MAKE SURE YOU HAVE THE COURIER NEW FONT INSTALLED"""
-    font = ImageFont.truetype(FONT_FILE, size = math.floor((fontSize)));
+    font = ImageFont.truetype(FONT_FILE, size = fontSize);
 
     # Create a blank image for our label
-    img = Image.new("RGB", (width, height), color="white");
+    img = Image.new("RGB", (width, height), color=(255, 255, 255));
     # And a draw object so we can draw to our image
     draw = ImageDraw.Draw(img);
 
     # Draw the text at 0, 0
-    draw.text((0, 0), idNumStr, font = font, spacing = 0, fill = "black");
+    draw.text(textXY, idNumStr, font = font, spacing = 0, fill = "black");
     # Paste the qr code at the qr code position
     img.paste(qrImg, box = qrXY);
 
     # Lastily, return the image!
     return img;
+
+# genSheet - generate a PIL label sheet, assumes the dbList has
+#            not been initialized
+def genSheet(width, height, xcount, ycount, xmargin, ymargin):
+    sheet = Image.new("RGB", (width, height), color="white");
+    pissdb.init();
+
+    actualWidth = width - (xmargin * 2);
+    actualHeight = height - (ymargin * 2);
+
+    labelWidth = int(actualWidth / xcount);
+    labelHeight = int(actualHeight / ycount);
+
+    labelX = xmargin;
+    labelY = ymargin;
+
+    for i in range(ycount):
+
+        for j in range(xcount):
+            idNum = pissdb.genIdNum();
+            label = makeLabel(idNum, labelWidth, labelHeight);
+            sheet.paste(label, box = (labelX, labelY));
+            labelX += labelWidth;
+
+        labelX = xmargin;
+        labelY += labelHeight;
+
+    return sheet;
